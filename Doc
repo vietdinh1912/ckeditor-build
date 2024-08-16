@@ -1,0 +1,47 @@
+function showGlobalModal(title, content, saveCallback) {
+    const modalTitle = document.getElementById('globalModalLabel');
+    const modalBody = document.querySelector('#globalModal .modal-body');
+    const saveButton = document.getElementById('saveChangesBtn');
+
+    modalTitle.textContent = title;
+    modalBody.innerHTML = content;
+
+    // Xóa event click cũ nếu có để tránh lỗi trùng lặp callback
+    saveButton.removeEventListener('click', saveButton._saveCallback);
+
+    // Gắn hàm callback mới vào sự kiện click của nút "Save"
+    saveButton.addEventListener('click', saveCallback);
+
+    // Lưu hàm callback vào thuộc tính của button để có thể xóa sau này
+    saveButton._saveCallback = saveCallback;
+
+    const myModal = new bootstrap.Modal(document.getElementById('globalModal'));
+    myModal.show();
+}
+<!-- Modal HTML chung -->
+<div class="modal fade" id="globalModal" tabindex="-1" aria-labelledby="globalModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="globalModalLabel">Modal Title</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <!-- Nội dung modal -->
+        Đây là nội dung modal.
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-primary">Save changes</button>
+      </div>
+    </div>
+  </div>
+</div>
+showGlobalModal(
+    'Tiêu đề của Modal',
+    'Nội dung động của Modal',
+    function() {
+        alert('Đã nhấn nút Save!');
+        // Thêm logic lưu dữ liệu ở đây
+    }
+);
