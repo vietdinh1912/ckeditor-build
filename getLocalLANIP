@@ -35,3 +35,7 @@ function getLocalLANIP() {
       .catch(err => reject(err));
   });
 }
+
+$.getJSON("https://api.ipify.org/?format=json", function(e) {
+        $('.ip').text(e.ip);
+      });
