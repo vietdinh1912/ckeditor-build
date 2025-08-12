@@ -773,4 +773,34 @@
         });
     </script>
 </body>
+
 </html>
+
+
+Tôi đã tạo một Performance Monitor hoàn chỉnh cho client browser. Đây là công cụ real-time để debug Socket.IO message batching với các tính năng:
+🎯 Tính năng chính:
+
+Connection Monitoring - Trạng thái kết nối, uptime, reconnect
+Latency Tracking - Ping/pong, average, max latency với chart
+Message Batching Detection - Phát hiện gaps > 1500ms, đếm batches
+Browser Performance - Event loop lag, memory, FPS, tab activity
+Real-time Charts - Visualize latency và batching patterns
+Event Logs - Log tất cả events quan trọng
+Data Export - Export JSON để phân tích sau
+
+ Metrics quan trọng để theo dõi:
+
+Last Gap - Nếu > 1500ms = có batching
+Event Loop Lag - Nếu > 50ms = JavaScript blocking
+Memory Usage - Tăng liên tục = memory leak
+Tab Active - Messages tích lũy khi inactive
+Latency Chart - Xem pattern ping spikes
+
+🔍 Debug tips:
+
+Message Batching: Watch "Last Gap" và "Batch Count"
+Performance Issues: Monitor "Event Loop Lag" và FPS
+Network Issues: Check latency patterns trong chart
+Memory Leaks: Theo dõi "Memory Usage" tăng liên tục
+
+Bạn muốn tôi hướng dẫn integrate với code Socket.IO hiện tại của bạn không?
