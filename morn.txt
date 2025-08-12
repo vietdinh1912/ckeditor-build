@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.IO Performance Monitor</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Courier New', monospace; background: #1a1a1a; color: #00ff00; }
+        
+        .monitor-container {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            width: 400px;
+            max-height: 90vh;
+            background: rgba(0, 0, 0, 0.95);
+            border: 1px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+            z-index: 9999;
+            font-size: 11px;
+        }
+        
+        .monitor-header {
+            background: #333;
+            padding: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .monitor-header h3 { color: #00ff00; font-size: 12px; }
+        
+        .toggle-btn {
+            background: #555;
+            border: none;
+            color: #fff;
+            padding: 4px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 10px;
+        }
+        
+        .monitor-body {
+            padding: 10px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        
+        .section {
+            margin-bottom: 15px;
+            border: 1px solid #333;
+            border-radius: 4px;
+        }
+        
+        .section-header {
+            background: #222;
+            padding: 5px 8px;
+            font-weight: bold;
+            color: #ff6600;
+            cursor: pointer;
+        }
+        
+        .section-content {
+            padding: 8px;
+        }
+        
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            margin: 3px 0;
+        }
+        
+        .metric-label { color: #ccc; }
+        .metric-value { color: #00ff00; font-weight: bold; }
+        .metric-warning { color: #ffaa00 !important; }
+        .metric-error { color: #ff4444 !important; }
+        
+        .chart-container {
+            height: 60px;
+            background: #111;
+            border: 1px solid #333;
+            margin: 5px 0;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .chart-line {
+            position: absolute;
+            bottom: 0;
+            width: 2px;
+            background: #00ff00;
+            transition: height 0.1s;
+        }
+        
+        .log-container {
+            max-height: 150px;
+            overflow-y: auto;
+            background: #111;
+            border: 1px solid #333;
+            padding: 5px;
+            margin: 5px 0;
+        }
+        
+        .log-entry {
+            margin: 2px 0;
+            font-size: 10px;
+        }
+        
+        .log-info { color: #00ff00; }
+        .log-warning { color: #ffaa00; }
+        .log-error { color: #ff4444; }
+        
+        .hidden { display: none; }
+        
+        .controls {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+        
+        .control-btn {
+            background: #444;
+            border: none;
+            color: #fff;
+            padding: 3px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 9px;
+        }
+        
+        .control-btn:hover { background: #555; }
+        .control-btn.active { background: #006600; }
+    </style>
+</head>
+<body>
+    <div class="monitor-container" id="performanceMonitor">
+        <div class="monitor-header">
+            <h3>⚡ Socket Performance Monitor</h3>
+            <button class="toggle-btn" onclick="toggleMonitor()">−</button>
+        </div>
+        
+        <div class="monitor-body" id="monitorBody">
+            <div class="controls">
+                <button class="control-btn active" onclick="toggleSection('realtime')">Real-time</button>
+                <button class="control-btn" onclick="toggleSection('analysis')">Analysis</button>
+                <button class="control-btn" onclick="clearLogs()">Clear</button>
+                <button class="control-btn" onclick="exportData()">Export</button>
+            </div>
+            
+            <!-- Real-time Metrics -->
+            <div class="section" id="connection-section">
+                <div class="section-header">🔗 Connection Status</div>
+                <div class="section-content">
+                    <div class="metric">
+                        <span class="metric-label">Status:</span>
+                        <span class="metric-value" id="connection-status">Disconnected</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Uptime:</span>
+                        <span class="metric-value" id="connection-uptime">0s</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Reconnects:</span>
+                        <span class="metric-value" id="reconnect-count">0</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Latency Metrics -->
+            <div class="section" id="latency-section">
+                <div class="section-header">📊 Latency & Throughput</div>
+                <div class="section-content">
+                    <div class="metric">
+                        <span class="metric-label">Current Ping:</span>
+                        <span class="metric-value" id="current-ping">0ms</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Avg Latency:</span>
+                        <span class="metric-value" id="avg-latency">0ms</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Max Latency:</span>
+                        <span class="metric-value" id="max-latency">0ms</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Messages/sec:</span>
+                        <span class="metric-value" id="msg-rate">0</span>
+                    </div>
+                    <div class="chart-container" id="latency-chart"></div>
+                </div>
+            </div>
+            
+            <!-- Message Batching -->
+            <div class="section" id="batching-section">
+                <div class="section-header">📦 Message Batching</div>
+                <div class="section-content">
+                    <div class="metric">
+                        <span class="metric-label">Last Gap:</span>
+                        <span class="metric-value" id="last-gap">0ms</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Batch Count:</span>
+                        <span class="metric-value" id="batch-count">0</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Avg Batch Size:</span>
+                        <span class="metric-value" id="avg-batch-size">0</span>
+                    </div>
+                    <div class="chart-container" id="batch-chart"></div>
+                </div>
+            </div>
+            
+            <!-- Browser Performance -->
+            <div class="section" id="browser-section">
+                <div class="section-header">🖥️ Browser Performance</div>
+                <div class="section-content">
+                    <div class="metric">
+                        <span class="metric-label">Event Loop Lag:</span>
+                        <span class="metric-value" id="event-loop-lag">0ms</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Tab Active:</span>
+                        <span class="metric-value" id="tab-active">Yes</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">FPS:</span>
+                        <span class="metric-value" id="fps">60</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Memory Usage Detail -->
+            <div class="section" id="memory-section">
+                <div class="section-header">🧠 Memory Usage</div>
+                <div class="section-content">
+                    <div class="metric">
+                        <span class="metric-label">Used Heap:</span>
+                        <span class="metric-value" id="memory-used">0MB</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Total Heap:</span>
+                        <span class="metric-value" id="memory-total">0MB</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Heap Limit:</span>
+                        <span class="metric-value" id="memory-limit">0MB</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Usage %:</span>
+                        <span class="metric-value" id="memory-percent">0%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">Growth Rate:</span>
+                        <span class="metric-value" id="memory-growth">0MB/min</span>
+                    </div>
+                    <div class="chart-container" id="memory-chart"></div>
+                </div>
+            </div>
+            
+            <!-- Event Logs -->
+            <div class="section" id="logs-section">
+                <div class="section-header">📝 Event Logs</div>
+                <div class="section-content">
+                    <div class="log-container" id="event-logs"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class SocketPerformanceMonitor {
+            constructor() {
+                this.stats = {
+                    connection: {
+                        status: 'disconnected',
+                        uptime: 0,
+                        reconnectCount: 0,
+                        connectedAt: null
+                    },
+                    latency: {
+                        current: 0,
+                        avg: 0,
+                        max: 0,
+                        history: [],
+                        samples: []
+                    },
+                    messages: {
+                        received: 0,
+                        rate: 0,
+                        lastReceived: null,
+                        gaps: [],
+                        batches: 0,
+                        avgBatchSize: 0
+                    },
+                    browser: {
+                        eventLoopLag: 0,
+                        isTabActive: true,
+                        fps: 60
+                    },
+                    memory: {
+                        used: 0,
+                        total: 0,
+                        limit: 0,
+                        percent: 0,
+                        growth: 0,
+                        history: [],
+                        lastMeasurement: null
+                    }
+                };
+                
+                this.logs = [];
+                this.charts = {
+                    latency: [],
+                    batches: [],
+                    memory: []
+                };
+                
+                this.init();
+            }
+            
+            init() {
+                this.setupEventLoopMonitoring();
+                this.setupMemoryMonitoring();
+                this.setupTabVisibilityMonitoring();
+                this.setupFPSMonitoring();
+                this.startUpdateLoop();
+                this.log('Monitor initialized', 'info');
+            }
+            
+            // Socket Event Handlers
+            onConnect(socket) {
+                this.stats.connection.status = 'connected';
+                this.stats.connection.connectedAt = Date.now();
+                this.log('Socket connected', 'info');
+                
+                // Setup ping monitoring
+                this.setupPingMonitoring(socket);
+            }
+            
+            onDisconnect(reason) {
+                this.stats.connection.status = 'disconnected';
+                this.log(`Socket disconnected: ${reason}`, 'warning');
+            }
+            
+            onReconnect(attemptNumber) {
+                this.stats.connection.reconnectCount++;
+                this.log(`Reconnected after ${attemptNumber} attempts`, 'info');
+            }
+            
+            onMessage(eventName, data) {
+                const now = Date.now();
+                const lastMsg = this.stats.messages.lastReceived;
+                
+                this.stats.messages.received++;
+                
+                if (lastMsg) {
+                    const gap = now - lastMsg;
+                    this.stats.messages.gaps.push(gap);
+                    
+                    // Detect batching (gap > 1500ms)
+                    if (gap > 1500) {
+                        this.stats.messages.batches++;
+                        this.log(`Message batch detected: ${gap}ms gap`, 'warning');
+                    }
+                    
+                    // Keep only last 100 gaps
+                    if (this.stats.messages.gaps.length > 100) {
+                        this.stats.messages.gaps.shift();
+                    }
+                }
+                
+                this.stats.messages.lastReceived = now;
+                this.updateMessageRate();
+            }
+            
+            setupPingMonitoring(socket) {
+                setInterval(() => {
+                    const start = performance.now();
+                    socket.emit('ping', start);
+                }, 1000);
+                
+                socket.on('pong', (timestamp) => {
+                    const latency = performance.now() - timestamp;
+                    this.recordLatency(latency);
+                });
+            }
+            
+            recordLatency(latency) {
+                this.stats.latency.current = Math.round(latency);
+                this.stats.latency.samples.push(latency);
+                this.stats.latency.max = Math.max(this.stats.latency.max, latency);
+                
+                // Calculate average
+                if (this.stats.latency.samples.length > 0) {
+                    const sum = this.stats.latency.samples.reduce((a, b) => a + b, 0);
+                    this.stats.latency.avg = Math.round(sum / this.stats.latency.samples.length);
+                }
+                
+                // Keep only last 60 samples
+                if (this.stats.latency.samples.length > 60) {
+                    this.stats.latency.samples.shift();
+                }
+                
+                // Update chart data
+                this.charts.latency.push(latency);
+                if (this.charts.latency.length > 60) {
+                    this.charts.latency.shift();
+                }
+                
+                if (latency > 1000) {
+                    this.log(`High latency detected: ${Math.round(latency)}ms`, 'warning');
+                }
+            }
+            
+            setupEventLoopMonitoring() {
+                let lastCheck = performance.now();
+                
+                const checkLoop = () => {
+                    const now = performance.now();
+                    const lag = now - lastCheck - 16; // Expected ~16ms for 60fps
+                    
+                    if (lag > 0) {
+                        this.stats.browser.eventLoopLag = Math.round(lag);
+                        
+                        if (lag > 100) {
+                            this.log(`Event loop blocked: ${Math.round(lag)}ms`, 'error');
+                        }
+                    }
+                    
+                    lastCheck = now;
+                    setTimeout(checkLoop, 16);
+                };
+                
+                checkLoop();
+            }
+            
+            setupMemoryMonitoring() {
+                const startTime = Date.now();
+                
+                const measureMemory = () => {
+                    if (performance.memory) {
+                        const used = performance.memory.usedJSHeapSize / 1048576; // MB
+                        const total = performance.memory.totalJSHeapSize / 1048576;
+                        const limit = performance.memory.jsHeapSizeLimit / 1048576;
+                        
+                        // Calculate growth rate
+                        let growth = 0;
+                        if (this.stats.memory.lastMeasurement) {
+                            const timeDiff = (Date.now() - this.stats.memory.lastMeasurement.time) / 60000; // minutes
+                            const memDiff = used - this.stats.memory.lastMeasurement.used;
+                            growth = timeDiff > 0 ? memDiff / timeDiff : 0;
+                        }
+                        
+                        this.stats.memory = {
+                            used: Math.round(used * 100) / 100,
+                            total: Math.round(total * 100) / 100,
+                            limit: Math.round(limit * 100) / 100,
+                            percent: Math.round((used / limit) * 100),
+                            growth: Math.round(growth * 100) / 100,
+                            history: [...this.stats.memory.history, used].slice(-60), // Keep last 60 measurements
+                            lastMeasurement: { used, time: Date.now() }
+                        };
+                        
+                        // Update chart data
+                        this.charts.memory.push(used);
+                        if (this.charts.memory.length > 60) {
+                            this.charts.memory.shift();
+                        }
+                        
+                        // Warning thresholds
+                        if (this.stats.memory.percent > 90) {
+                            this.log(`Critical memory usage: ${this.stats.memory.percent}%`, 'error');
+                        } else if (this.stats.memory.percent > 75) {
+                            this.log(`High memory usage: ${this.stats.memory.percent}%`, 'warning');
+                        }
+                        
+                        // Memory leak detection
+                        if (growth > 1) { // More than 1MB/min growth
+                            this.log(`Possible memory leak: +${growth.toFixed(2)}MB/min`, 'warning');
+                        }
+                    } else {
+                        // Fallback for browsers without performance.memory
+                        this.log('Memory monitoring not available in this browser', 'warning');
+                    }
+                };
+                
+                // Initial measurement
+                measureMemory();
+                
+                // Regular measurements every 2 seconds
+                setInterval(measureMemory, 2000);
+            }
+            
+            setupTabVisibilityMonitoring() {
+                let messagesWhileInactive = 0;
+                
+                document.addEventListener('visibilitychange', () => {
+                    const wasActive = this.stats.browser.isTabActive;
+                    this.stats.browser.isTabActive = !document.hidden;
+                    
+                    if (!wasActive && this.stats.browser.isTabActive) {
+                        this.log(`Tab active again. Messages while inactive: ${messagesWhileInactive}`, 'info');
+                        messagesWhileInactive = 0;
+                    } else if (wasActive && !this.stats.browser.isTabActive) {
+                        this.log('Tab became inactive', 'info');
+                    }
+                });
+            }
+            
+            setupFPSMonitoring() {
+                let frames = 0;
+                let lastTime = performance.now();
+                
+                const countFPS = () => {
+                    frames++;
+                    
+                    const now = performance.now();
+                    if (now - lastTime >= 1000) {
+                        this.stats.browser.fps = Math.round((frames * 1000) / (now - lastTime));
+                        frames = 0;
+                        lastTime = now;
+                    }
+                    
+                    requestAnimationFrame(countFPS);
+                };
+                
+                requestAnimationFrame(countFPS);
+            }
+            
+            updateMessageRate() {
+                // Calculate messages per second over last 5 seconds
+                const now = Date.now();
+                const fiveSecondsAgo = now - 5000;
+                const recentMessages = this.stats.messages.gaps
+                    .map((gap, i) => now - gap * i)
+                    .filter(timestamp => timestamp > fiveSecondsAgo);
+                
+                this.stats.messages.rate = Math.round(recentMessages.length / 5);
+            }
+            
+            startUpdateLoop() {
+                setInterval(() => {
+                    this.updateUI();
+                    this.updateCharts();
+                }, 100);
+            }
+            
+            updateUI() {
+                // Connection Status
+                document.getElementById('connection-status').textContent = this.stats.connection.status;
+                document.getElementById('connection-status').className = 
+                    this.stats.connection.status === 'connected' ? 'metric-value' : 'metric-error';
+                
+                if (this.stats.connection.connectedAt) {
+                    const uptime = Math.round((Date.now() - this.stats.connection.connectedAt) / 1000);
+                    document.getElementById('connection-uptime').textContent = `${uptime}s`;
+                }
+                
+                document.getElementById('reconnect-count').textContent = this.stats.connection.reconnectCount;
+                
+                // Latency
+                document.getElementById('current-ping').textContent = `${this.stats.latency.current}ms`;
+                document.getElementById('current-ping').className = 
+                    this.stats.latency.current > 500 ? 'metric-warning' : 'metric-value';
+                
+                document.getElementById('avg-latency').textContent = `${this.stats.latency.avg}ms`;
+                document.getElementById('max-latency').textContent = `${this.stats.latency.max}ms`;
+                document.getElementById('msg-rate').textContent = this.stats.messages.rate;
+                
+                // Batching
+                const lastGap = this.stats.messages.gaps.length > 0 ? 
+                    this.stats.messages.gaps[this.stats.messages.gaps.length - 1] : 0;
+                document.getElementById('last-gap').textContent = `${Math.round(lastGap)}ms`;
+                document.getElementById('last-gap').className = 
+                    lastGap > 1500 ? 'metric-warning' : 'metric-value';
+                
+                document.getElementById('batch-count').textContent = this.stats.messages.batches;
+                
+                // Browser Performance
+                document.getElementById('event-loop-lag').textContent = `${this.stats.browser.eventLoopLag}ms`;
+                document.getElementById('event-loop-lag').className = 
+                    this.stats.browser.eventLoopLag > 50 ? 'metric-warning' : 'metric-value';
+                
+                document.getElementById('tab-active').textContent = this.stats.browser.isTabActive ? 'Yes' : 'No';
+                document.getElementById('tab-active').className = 
+                    this.stats.browser.isTabActive ? 'metric-value' : 'metric-warning';
+                
+                document.getElementById('fps').textContent = this.stats.browser.fps;
+                document.getElementById('fps').className = 
+                    this.stats.browser.fps < 30 ? 'metric-warning' : 'metric-value';
+                
+                // Memory Usage Details
+                document.getElementById('memory-used').textContent = `${this.stats.memory.used}MB`;
+                document.getElementById('memory-used').className = 
+                    this.stats.memory.percent > 75 ? 'metric-warning' : 'metric-value';
+                
+                document.getElementById('memory-total').textContent = `${this.stats.memory.total}MB`;
+                document.getElementById('memory-limit').textContent = `${this.stats.memory.limit}MB`;
+                
+                document.getElementById('memory-percent').textContent = `${this.stats.memory.percent}%`;
+                document.getElementById('memory-percent').className = 
+                    this.stats.memory.percent > 90 ? 'metric-error' : 
+                    this.stats.memory.percent > 75 ? 'metric-warning' : 'metric-value';
+                
+                const growthText = this.stats.memory.growth >= 0 ? 
+                    `+${this.stats.memory.growth}MB/min` : `${this.stats.memory.growth}MB/min`;
+                document.getElementById('memory-growth').textContent = growthText;
+                document.getElementById('memory-growth').className = 
+                    this.stats.memory.growth > 1 ? 'metric-warning' : 'metric-value';
+            }
+            
+            updateCharts() {
+                this.updateLatencyChart();
+                this.updateBatchChart();
+                this.updateMemoryChart();
+            }
+            
+            updateLatencyChart() {
+                const container = document.getElementById('latency-chart');
+                container.innerHTML = '';
+                
+                const maxLatency = Math.max(...this.charts.latency, 100);
+                const width = container.offsetWidth;
+                const barWidth = Math.max(1, width / this.charts.latency.length);
+                
+                this.charts.latency.forEach((latency, i) => {
+                    const bar = document.createElement('div');
+                    bar.className = 'chart-line';
+                    bar.style.left = `${i * barWidth}px`;
+                    bar.style.height = `${(latency / maxLatency) * 60}px`;
+                    bar.style.backgroundColor = latency > 500 ? '#ff4444' : 
+                                               latency > 200 ? '#ffaa00' : '#00ff00';
+                    container.appendChild(bar);
+                });
+            }
+            
+            updateMemoryChart() {
+                const container = document.getElementById('memory-chart');
+                container.innerHTML = '';
+                
+                if (this.charts.memory.length === 0) return;
+                
+                const maxMemory = Math.max(...this.charts.memory, this.stats.memory.limit * 0.5);
+                const width = container.offsetWidth;
+                const barWidth = Math.max(1, width / this.charts.memory.length);
+                
+                this.charts.memory.forEach((memory, i) => {
+                    const bar = document.createElement('div');
+                    bar.className = 'chart-line';
+                    bar.style.left = `${i * barWidth}px`;
+                    bar.style.height = `${(memory / maxMemory) * 60}px`;
+                    
+                    // Color coding based on percentage
+                    const percent = (memory / this.stats.memory.limit) * 100;
+                    bar.style.backgroundColor = percent > 90 ? '#ff4444' : 
+                                               percent > 75 ? '#ffaa00' : 
+                                               percent > 50 ? '#66ff00' : '#00ff00';
+                    
+                    container.appendChild(bar);
+                });
+            }
+            
+            updateBatchChart() {
+                // Simplified batch visualization
+                const container = document.getElementById('batch-chart');
+                const gaps = this.stats.messages.gaps.slice(-30);
+                
+                container.innerHTML = '';
+                
+                if (gaps.length === 0) return;
+                
+                const maxGap = Math.max(...gaps, 1000);
+                const width = container.offsetWidth;
+                const barWidth = Math.max(1, width / gaps.length);
+                
+                gaps.forEach((gap, i) => {
+                    const bar = document.createElement('div');
+                    bar.className = 'chart-line';
+                    bar.style.left = `${i * barWidth}px`;
+                    bar.style.height = `${Math.min((gap / maxGap) * 60, 60)}px`;
+                    bar.style.backgroundColor = gap > 1500 ? '#ff4444' : '#00ff00';
+                    container.appendChild(bar);
+                });
+            }
+            
+            log(message, type = 'info') {
+                const timestamp = new Date().toLocaleTimeString();
+                const logEntry = {
+                    timestamp,
+                    message,
+                    type
+                };
+                
+                this.logs.push(logEntry);
+                
+                // Keep only last 100 logs
+                if (this.logs.length > 100) {
+                    this.logs.shift();
+                }
+                
+                this.updateLogDisplay();
+            }
+            
+            updateLogDisplay() {
+                const container = document.getElementById('event-logs');
+                container.innerHTML = '';
+                
+                this.logs.slice(-20).forEach(log => {
+                    const entry = document.createElement('div');
+                    entry.className = `log-entry log-${log.type}`;
+                    entry.textContent = `[${log.timestamp}] ${log.message}`;
+                    container.appendChild(entry);
+                });
+                
+                container.scrollTop = container.scrollHeight;
+            }
+            
+            exportData() {
+                const data = {
+                    timestamp: new Date().toISOString(),
+                    stats: this.stats,
+                    logs: this.logs,
+                    charts: this.charts
+                };
+                
+                const blob = new Blob([JSON.stringify(data, null, 2)], 
+                    { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `socket-performance-${Date.now()}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+            }
+            
+            clearLogs() {
+                this.logs = [];
+                this.updateLogDisplay();
+            }
+        }
+        
+        // Global functions for UI
+        function toggleMonitor() {
+            const body = document.getElementById('monitorBody');
+            const btn = document.querySelector('.toggle-btn');
+            
+            if (body.classList.contains('hidden')) {
+                body.classList.remove('hidden');
+                btn.textContent = '−';
+            } else {
+                body.classList.add('hidden');
+                btn.textContent = '+';
+            }
+        }
+        
+        function toggleSection(section) {
+            // Toggle active button
+            document.querySelectorAll('.control-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+        }
+        
+        function clearLogs() {
+            if (window.socketMonitor) {
+                window.socketMonitor.clearLogs();
+            }
+        }
+        
+        function exportData() {
+            if (window.socketMonitor) {
+                window.socketMonitor.exportData();
+            }
+        }
+        
+        // Initialize monitor
+        window.socketMonitor = new SocketPerformanceMonitor();
+        
+        // Example usage with Socket.IO
+        /*
+        // Kết nối Socket.IO với monitor
+        const socket = io();
+        
+        socket.on('connect', () => {
+            window.socketMonitor.onConnect(socket);
+        });
+        
+        socket.on('disconnect', (reason) => {
+            window.socketMonitor.onDisconnect(reason);
+        });
+        
+        socket.on('reconnect', (attemptNumber) => {
+            window.socketMonitor.onReconnect(attemptNumber);
+        });
+        
+        // Monitor messages
+        socket.on('your_event', (data) => {
+            window.socketMonitor.onMessage('your_event', data);
+        });
+        */
+        
+        console.log('Socket.IO Performance Monitor loaded!');
+        console.log('Usage:');
+        console.log('window.socketMonitor.onConnect(socket)');
+        console.log('window.socketMonitor.onMessage(eventName, data)');
+    </script>
+</body>
+</html>
