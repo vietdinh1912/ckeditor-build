@@ -1,0 +1,299 @@
+// ===== NGUYÊN NHÂN CHÍNH =====
+
+/*
+1. BUFFERING DO TRANSPORT POLLING
+   - Socket.IO 1.7.4 mặc định dùng polling trước khi upgrade lên websocket
+   - Polling có interval delay (thường 25ms-100ms)
+   - Messages bị buffer trong polling cycles
+
+2. HEARTBEAT/PING TIMEOUT
+   - Client/server tạm thời mất kết nối
+   - Messages bị queue cho đến khi reconnect
+   - Ping interval mặc định: 25s, timeout: 60s
+
+3. BROWSER TAB THROTTLING
+   - Browser throttle inactive tabs
+   - Timers bị slow down khi tab không active
+
+4. NETWORK CONGESTION
+   - TCP backpressure
+   - Packet loss và retransmission
+
+5. EVENT LOOP BLOCKING
+   - CPU intensive tasks block event loop
+   - Messages bị queue cho đến khi event loop free
+*/
+
+// ===== CÁCH DEBUG =====
+
+// 1. Enable Debug Logs
+// Server side
+process.env.DEBUG = 'socket.io:*';
+// Hoặc specific
+process.env.DEBUG = 'socket.io:client,socket.io:socket';
+
+// Client side (browser console)
+localStorage.debug = 'socket.io-client:*';
+// Reload page để apply
+
+// 2. Monitor Connection Events
+const io = require('socket.io')(server);
+
+io.on('connection', (socket) => {
+    console.log(`[${new Date().toISOString()}] Client connected: ${socket.id}`);
+    console.log(`Transport: ${socket.conn.transport.name}`);
+    
+    // Monitor transport changes
+    socket.conn.on('upgrade', () => {
+        console.log(`[${new Date().toISOString()}] Upgraded to: ${socket.conn.transport.name}`);
+    });
+    
+    socket.conn.on('upgradeError', (err) => {
+        console.log(`[${new Date().toISOString()}] Upgrade error:`, err);
+    });
+    
+    // Monitor ping/pong
+    socket.on('ping', () => {
+        console.log(`[${new Date().toISOString()}] Ping from ${socket.id}`);
+    });
+    
+    socket.on('pong', (latency) => {
+        console.log(`[${new Date().toISOString()}] Pong from ${socket.id}, latency: ${latency}ms`);
+    });
+    
+    // Monitor disconnect
+    socket.on('disconnect', (reason) => {
+        console.log(`[${new Date().toISOString()}] Client disconnected: ${socket.id}, reason: ${reason}`);
+    });
+});
+
+// 3. Client Side Debug
+const socket = io('http://localhost:3000', {
+    // Force websocket để tránh polling
+    transports: ['websocket'],
+    
+    // Reduce ping interval để detect disconnect sớm hơn
+    pingInterval: 10000,    // 10s instead of 25s
+    pingTimeout: 5000,      // 5s instead of 60s
+    
+    // Upgrade timeout
+    upgradeTimeout: 10000,
+    
+    // Reconnection settings
+    reconnection: true,
+    reconnectionDelay: 1000,
+    reconnectionAttempts: 5
+});
+
+// Monitor client events
+socket.on('connect', () => {
+    console.log(`[${new Date().toISOString()}] Connected`);
+    console.log(`Transport: ${socket.io.engine.transport.name}`);
+});
+
+socket.on('disconnect', (reason) => {
+    console.log(`[${new Date().toISOString()}] Disconnected: ${reason}`);
+});
+
+socket.on('reconnect', (attemptNumber) => {
+    console.log(`[${new Date().toISOString()}] Reconnected after ${attemptNumber} attempts`);
+});
+
+socket.on('reconnect_error', (error) => {
+    console.log(`[${new Date().toISOString()}] Reconnect error:`, error);
+});
+
+// 4. Message Timing Debug
+let messageCount = 0;
+let lastMessageTime = Date.now();
+
+socket.on('your-event', (data) => {
+    const now = Date.now();
+    const gap = now - lastMessageTime;
+    messageCount++;
+    
+    console.log(`[${new Date().toISOString()}] Message #${messageCount}, gap: ${gap}ms`, data);
+    
+    // Detect buffering (nhiều messages với gap nhỏ sau 1 khoảng trống lớn)
+    if (gap > 1000) {
+        console.warn(`⚠️ Large gap detected: ${gap}ms`);
+    }
+    
+    lastMessageTime = now;
+});
+
+// ===== GIẢI PHÁP =====
+
+// Server Configuration
+const io = require('socket.io')(server, {
+    // 1. Force websocket transport
+    transports: ['websocket'],
+    
+    // 2. Reduce ping intervals
+    pingInterval: 10000,
+    pingTimeout: 5000,
+    
+    // 3. Upgrade immediately
+    upgradeTimeout: 10000,
+    
+    // 4. CORS if needed
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
+
+// Client Configuration
+const socket = io('ws://localhost:3000', {
+    // 1. Force websocket
+    transports: ['websocket'],
+    
+    // 2. Reduce timeouts
+    timeout: 5000,
+    
+    // 3. Fast reconnection
+    reconnectionDelay: 500,
+    reconnectionDelayMax: 2000,
+    
+    // 4. Force new connection
+    forceNew: true
+});
+
+// ===== MESSAGE QUEUING SOLUTION =====
+
+// Server: Prevent message buildup
+class MessageQueue {
+    constructor(socket, maxQueueSize = 100) {
+        this.socket = socket;
+        this.queue = [];
+        this.maxQueueSize = maxQueueSize;
+        this.isProcessing = false;
+    }
+    
+    async emit(event, data) {
+        // Check if socket is connected
+        if (!this.socket.connected) {
+            console.warn(`Socket ${this.socket.id} not connected, dropping message`);
+            return;
+        }
+        
+        // Prevent queue overflow
+        if (this.queue.length >= this.maxQueueSize) {
+            console.warn(`Queue full for ${this.socket.id}, dropping oldest message`);
+            this.queue.shift();
+        }
+        
+        this.queue.push({ event, data, timestamp: Date.now() });
+        
+        if (!this.isProcessing) {
+            this.processQueue();
+        }
+    }
+    
+    async processQueue() {
+        this.isProcessing = true;
+        
+        while (this.queue.length > 0) {
+            if (!this.socket.connected) {
+                console.warn(`Socket disconnected, stopping queue processing`);
+                break;
+            }
+            
+            const message = this.queue.shift();
+            const age = Date.now() - message.timestamp;
+            
+            // Drop old messages
+            if (age > 30000) { // 30 seconds
+                console.warn(`Dropping old message (age: ${age}ms)`);
+                continue;
+            }
+            
+            try {
+                this.socket.emit(message.event, message.data);
+                // Small delay để tránh overwhelm
+                await new Promise(resolve => setTimeout(resolve, 1));
+            } catch (error) {
+                console.error(`Error emitting message:`, error);
+            }
+        }
+        
+        this.isProcessing = false;
+    }
+}
+
+// Usage
+io.on('connection', (socket) => {
+    const messageQueue = new MessageQueue(socket);
+    
+    // Thay vì socket.emit trực tiếp
+    messageQueue.emit('data', { message: 'Hello' });
+});
+
+// ===== BROWSER TAB VISIBILITY FIX =====
+
+// Client: Handle visibility change
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        console.log('Tab hidden - socket may be throttled');
+    } else {
+        console.log('Tab visible - reconnecting if needed');
+        if (!socket.connected) {
+            socket.connect();
+        }
+    }
+});
+
+// ===== NETWORK MONITORING =====
+
+// Client: Monitor network quality
+function monitorNetworkQuality() {
+    let pingStart;
+    
+    socket.on('ping', () => {
+        pingStart = Date.now();
+    });
+    
+    socket.on('pong', () => {
+        const latency = Date.now() - pingStart;
+        console.log(`Network latency: ${latency}ms`);
+        
+        if (latency > 1000) {
+            console.warn('⚠️ High latency detected - possible network issues');
+        }
+    });
+}
+
+monitorNetworkQuality();
+
+// ===== TROUBLESHOOTING CHECKLIST =====
+
+/*
+1. Check browser network tab:
+   - Xem có requests bị pending không
+   - Monitor websocket frames
+   - Check cho connection drops
+
+2. Enable debug logs:
+   - localStorage.debug = 'socket.io-client:*'
+   - process.env.DEBUG = 'socket.io:*'
+
+3. Monitor server resources:
+   - CPU usage during message spikes
+   - Memory usage
+   - Event loop lag
+
+4. Network analysis:
+   - Use Wireshark cho packet analysis
+   - Check firewall/proxy settings
+   - Test different networks
+
+5. Browser specific:
+   - Test multiple browsers
+   - Check browser console for errors
+   - Monitor tab throttling behavior
+
+6. Load testing:
+   - Simulate multiple clients
+   - Test with high message rates
+   - Monitor buffer sizes
+*/
