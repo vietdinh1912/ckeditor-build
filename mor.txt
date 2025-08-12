@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.IO Client Performance Monitor</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/1.7.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background: linear-gradient(135deg, #0c0c0c 0%, #1a1a1a 100%);
+            color: #00ff41;
+            overflow-x: hidden;
+        }
+
+        .monitor-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 400px;
+            background: rgba(0, 0, 0, 0.9);
+            border: 2px solid #00ff41;
+            border-radius: 10px;
+            padding: 15px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 0 30px rgba(0, 255, 65, 0.3);
+            z-index: 9999;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .monitor-header {
+            text-align: center;
+            color: #00ff41;
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            text-shadow: 0 0 10px #00ff41;
+            border-bottom: 1px solid #00ff41;
+            padding-bottom: 10px;
+        }
+
+        .metric-group {
+            margin-bottom: 15px;
+        }
+
+        .metric-group h3 {
+            color: #00ff41;
+            font-size: 14px;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 5px 8px;
+            margin: 3px 0;
+            border-radius: 4px;
+            transition: all 0.3s ease;
+            font-size: 12px;
+        }
+
+        .metric-label {
+            font-weight: bold;
+        }
+
+        .metric-value {
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+        }
+
+        .metric.excellent { 
+            background: rgba(0, 255, 0, 0.1); 
+            border-left: 3px solid #00ff00;
+            color: #00ff00;
+        }
+
+        .metric.good { 
+            background: rgba(0, 255, 65, 0.1); 
+            border-left: 3px solid #00ff41;
+            color: #00ff41;
+        }
+
+        .metric.warning { 
+            background: rgba(255, 255, 0, 0.1); 
+            border-left: 3px solid #ffff00;
+            color: #ffff00;
+        }
+
+        .metric.critical { 
+            background: rgba(255, 0, 0, 0.1); 
+            border-left: 3px solid #ff0000;
+            color: #ff0000;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: blink 1s infinite;
+        }
+
+        .status-connected { background: #00ff00; }
+        .status-disconnected { background: #ff0000; }
+        .status-connecting { background: #ffff00; }
+
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.3; }
+        }
+
+        .chart-container {
+            height: 60px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid #333;
+            border-radius: 4px;
+            margin: 5px 0;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .chart-bar {
+            position: absolute;
+            bottom: 0;
+            width: 2px;
+            background: linear-gradient(to top, #00ff41, #00ff00);
+            transition: height 0.3s ease;
+        }
+
+        .toggle-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: transparent;
+            border: 1px solid #00ff41;
+            color: #00ff41;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 10px;
+        }
+
+        .toggle-btn:hover {
+            background: rgba(0, 255, 65, 0.2);
+        }
+
+        .minimized {
+            height: 50px;
+            overflow: hidden;
+        }
+
+        .minimized .metric-group,
+        .minimized .chart-container {
+            display: none;
+        }
+
+        .log-container {
+            max-height: 100px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 5px;
+            margin: 10px 0;
+            font-size: 10px;
+        }
+
+        .log-entry {
+            margin: 2px 0;
+            padding: 2px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .log-entry.warning { color: #ffff00; }
+        .log-entry.error { color: #ff0000; }
+        .log-entry.info { color: #00ff41; }
+
+        .controls {
+            margin-top: 10px;
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+
+        .control-btn {
+            background: rgba(0, 255, 65, 0.1);
+            border: 1px solid #00ff41;
+            color: #00ff41;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 10px;
+            flex: 1;
+            min-width: 60px;
+        }
+
+        .control-btn:hover {
+            background: rgba(0, 255, 65, 0.2);
+        }
+
+        .control-btn:active {
+            background: rgba(0, 255, 65, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <div class="monitor-container" id="monitor">
+        <button class="toggle-btn" onclick="toggleMonitor()">−</button>
+        
+        <div class="monitor-header">
+            <span class="status-indicator" id="connectionStatus"></span>
+            SOCKET.IO CLIENT MONITOR
+        </div>
+
+        <div class="metric-group">
+            <h3>Connection</h3>
+            <div class="metric" id="connectionMetric">
+                <span class="metric-label">Status:</span>
+                <span class="metric-value" id="connectionValue">Disconnected</span>
+            </div>
+            <div class="metric" id="latencyMetric">
+                <span class="metric-label">Latency:</span>
+                <span class="metric-value" id="latencyValue">0ms</span>
+            </div>
+            <div class="metric" id="transportMetric">
+                <span class="metric-label">Transport:</span>
+                <span class="metric-value" id="transportValue">Unknown</span>
+            </div>
+        </div>
+
+        <div class="metric-group">
+            <h3>Performance</h3>
+            <div class="metric" id="fpsMetric">
+                <span class="metric-label">FPS:</span>
+                <span class="metric-value" id="fpsValue">0</span>
+            </div>
+            <div class="metric" id="memoryMetric">
+                <span class="metric-label">JS Heap:</span>
+                <span class="metric-value" id="memoryValue">0MB</span>
+            </div>
+            <div class="metric" id="networkQualityMetric">
+                <span class="metric-label">Network:</span>
+                <span class="metric-value" id="networkQualityValue">Unknown</span>
+            </div>
+        </div>
+
+        <div class="metric-group">
+            <h3>Messages</h3>
+            <div class="metric" id="messagesReceivedMetric">
+                <span class="metric-label">Received:</span>
+                <span class="metric-value" id="messagesReceivedValue">0</span>
+            </div>
+            <div class="metric" id="messagesSentMetric">
+                <span class="metric-label">Sent:</span>
+                <span class="metric-value" id="messagesSentValue">0</span>
+            </div>
+            <div class="metric" id="messagesPerSecMetric">
+                <span class="metric-label">Rate/sec:</span>
+                <span class="metric-value" id="messagesPerSecValue">0</span>
+            </div>
+        </div>
+
+        <div class="metric-group">
+            <h3>Latency Chart</h3>
+            <div class="chart-container" id="latencyChart"></div>
+        </div>
+
+        <div class="metric-group">
+            <h3>Activity Log</h3>
+            <div class="log-container" id="logContainer"></div>
+        </div>
+
+        <div class="controls">
+            <button class="control-btn" onclick="clearLogs()">Clear Logs</button>
+            <button class="control-btn" onclick="testConnection()">Test Ping</button>
+            <button class="control-btn" onclick="reconnectSocket()">Reconnect</button>
+        </div>
+    </div>
+
+    <div style="padding: 20px; text-align: center; margin-top: 100px;">
+        <h1>Socket.IO Client Performance Monitor</h1>
+        <p>Monitor đang chạy ở góc phải màn hình</p>
+        <br>
+        <button onclick="simulateMessages()" style="padding: 10px 20px; font-size: 16px;">
+            Simulate Messages
+        </button>
+        <button onclick="stressTest()" style="padding: 10px 20px; font-size: 16px; margin-left: 10px;">
+            Stress Test
+        </button>
+    </div>
+
+    <script>
+        // ===== SOCKET.IO CLIENT PERFORMANCE MONITOR =====
+        
+        class SocketClientMonitor {
+            constructor(socketUrl = 'http://localhost:3000') {
+                this.socketUrl = socketUrl;
+                this.socket = null;
+                this.isMinimized = false;
+                
+                // Performance metrics
+                this.metrics = {
+                    connection: {
+                        status: 'disconnected',
+                        latency: 0,
+                        transport: 'unknown',
+                        reconnectAttempts: 0
+                    },
+                    performance: {
+                        fps: 0,
+                        memoryUsage: 0,
+                        networkQuality: 'unknown'
+                    },
+                    messages: {
+                        received: 0,
+                        sent: 0,
+                        rate: 0
+                    }
+                };
+                
+                // Charts data
+                this.latencyHistory = [];
+                this.maxHistoryPoints = 50;
+                
+                // Message rate calculation
+                this.messageCountInterval = 0;
+                this.lastMessageTime = Date.now();
+                
+                this.init();
+            }
+            
+            init() {
+                this.startFPSMonitoring();
+                this.startMemoryMonitoring();
+                this.connectSocket();
+                this.startPeriodicUpdates();
+                this.setupVisibilityChangeDetection();
+            }
+            
+            // ===== SOCKET CONNECTION =====
+            connectSocket() {
+                try {
+                    this.socket = io(this.socketUrl, {
+                        transports: ['websocket', 'polling'],
+                        timeout: 5000,
+                        reconnectionDelay: 1000,
+                        reconnectionAttempts: 5,
+                        forceNew: false
+                    });
+                    
+                    this.setupSocketEvents();
+                    this.log('Attempting to connect...', 'info');
+                    
+                } catch (error) {
+                    this.log(`Connection error: ${error.message}`, 'error');
+                    this.metrics.connection.status = 'error';
+                }
+            }
+            
+            setupSocketEvents() {
+                // Connection events
+                this.socket.on('connect', () => {
+                    this.metrics.connection.status = 'connected';
+                    this.metrics.connection.transport = this.socket.io.engine.transport.name;
+                    this.log(`Connected via ${this.metrics.connection.transport}`, 'info');
+                    this.startLatencyMonitoring();
+                });
+                
+                this.socket.on('disconnect', (reason) => {
+                    this.metrics.connection.status = 'disconnected';
+                    this.log(`Disconnected: ${reason}`, 'warning');
+                });
+                
+                this.socket.on('reconnect', (attemptNumber) => {
+                    this.metrics.connection.reconnectAttempts = attemptNumber;
+                    this.log(`Reconnected after ${attemptNumber} attempts`, 'info');
+                });
+                
+                this.socket.on('reconnect_attempt', (attemptNumber) => {
+                    this.metrics.connection.status = 'connecting';
+                    this.log(`Reconnect attempt ${attemptNumber}`, 'info');
+                });
+                
+                this.socket.on('reconnect_error', (error) => {
+                    this.log(`Reconnect error: ${error.message}`, 'error');
+                });
+                
+                this.socket.on('connect_error', (error) => {
+                    this.log(`Connect error: ${error.message}`, 'error');
+                    this.metrics.connection.status = 'error';
+                });
+                
+                // Transport upgrade
+                this.socket.io.engine.on('upgrade', () => {
+                    this.metrics.connection.transport = this.socket.io.engine.transport.name;
+                    this.log(`Transport upgraded to ${this.metrics.connection.transport}`, 'info');
+                });
+                
+                // Monitor all incoming messages
+                const originalOn = this.socket.on.bind(this.socket);
+                this.socket.on = (event, callback) => {
+                    return originalOn(event, (...args) => {
+                        if (event !== 'pong-test' && !event.includes('connect')) {
+                            this.metrics.messages.received++;
+                            this.messageCountInterval++;
+                        }
+                        return callback(...args);
+                    });
+                };
+                
+                // Monitor all outgoing messages
+                const originalEmit = this.socket.emit.bind(this.socket);
+                this.socket.emit = (event, ...args) => {
+                    if (event !== 'ping-test') {
+                        this.metrics.messages.sent++;
+                    }
+                    return originalEmit(event, ...args);
+                };
+                
+                // Test ping-pong
+                this.socket.on('pong-test', (timestamp) => {
+                    const latency = Date.now() - timestamp;
+                    this.updateLatency(latency);
+                });
+            }
+            
+            // ===== LATENCY MONITORING =====
+            startLatencyMonitoring() {
+                this.latencyInterval = setInterval(() => {
+                    if (this.socket && this.socket.connected) {
+                        const timestamp = Date.now();
+                        this.socket.emit('ping-test', timestamp);
+                        
+                        // Timeout fallback
+                        setTimeout(() => {
+                            if (this.metrics.connection.latency === 0) {
+                                this.log('Ping timeout detected', 'warning');
+                                this.updateLatency(9999);
+                            }
+                        }, 3000);
+                    }
+                }, 2000);
+            }
+            
+            updateLatency(latency) {
+                this.metrics.connection.latency = latency;
+                
+                // Add to history for chart
+                this.latencyHistory.push(latency);
+                if (this.latencyHistory.length > this.maxHistoryPoints) {
+                    this.latencyHistory.shift();
+                }
+                
+                // Update network quality
+                if (latency < 50) {
+                    this.metrics.performance.networkQuality = 'Excellent';
+                } else if (latency < 150) {
+                    this.metrics.performance.networkQuality = 'Good';
+                } else if (latency < 300) {
+                    this.metrics.performance.networkQuality = 'Fair';
+                } else if (latency < 500) {
+                    this.metrics.performance.networkQuality = 'Poor';
+                } else {
+                    this.metrics.performance.networkQuality = 'Critical';
+                }
+                
+                this.updateLatencyChart();
+            }
+            
+            // ===== FPS MONITORING =====
+            startFPSMonitoring() {
+                let lastTime = performance.now();
+                let frameCount = 0;
+                
+                const countFrames = (currentTime) => {
+                    frameCount++;
+                    
+                    if (currentTime >= lastTime + 1000) {
+                        this.metrics.performance.fps = Math.round((frameCount * 1000) / (currentTime - lastTime));
+                        frameCount = 0;
+                        lastTime = currentTime;
+                    }
+                    
+                    requestAnimationFrame(countFrames);
+                };
+                
+                requestAnimationFrame(countFrames);
+            }
+            
+            // ===== MEMORY MONITORING =====
+            startMemoryMonitoring() {
+                setInterval(() => {
+                    if (performance.memory) {
+                        const memoryMB = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
+                        this.metrics.performance.memoryUsage = memoryMB;
+                        
+                        if (memoryMB > 100) {
+                            this.log(`High memory usage: ${memoryMB}MB`, 'warning');
+                        }
+                    }
+                }, 3000);
+            }
+            
+            // ===== VISIBILITY CHANGE DETECTION =====
+            setupVisibilityChangeDetection() {
+                document.addEventListener('visibilitychange', () => {
+                    if (document.hidden) {
+                        this.log('Tab hidden - performance may be throttled', 'warning');
+                    } else {
+                        this.log('Tab visible - full performance restored', 'info');
+                        // Check connection when tab becomes visible
+                        if (this.socket && !this.socket.connected) {
+                            this.log('Reconnecting after tab activation...', 'info');
+                            this.socket.connect();
+                        }
+                    }
+                });
+            }
+            
+            // ===== PERIODIC UPDATES =====
+            startPeriodicUpdates() {
+                setInterval(() => {
+                    // Calculate message rate
+                    const now = Date.now();
+                    const timeElapsed = (now - this.lastMessageTime) / 1000;
+                    this.metrics.messages.rate = Math.round(this.messageCountInterval / timeElapsed);
+                    this.messageCountInterval = 0;
+                    this.lastMessageTime = now;
+                    
+                    this.updateDisplay();
+                }, 1000);
+            }
+            
+            // ===== UI UPDATES =====
+            updateDisplay() {
+                // Connection status
+                const statusElement = document.getElementById('connectionStatus');
+                const connectionValue = document.getElementById('connectionValue');
+                
+                statusElement.className = `status-indicator status-${this.metrics.connection.status}`;
+                connectionValue.textContent = this.metrics.connection.status.toUpperCase();
+                
+                this.updateMetric('connectionMetric', this.metrics.connection.status, 'connected');
+                
+                // Update all metrics
+                document.getElementById('latencyValue').textContent = `${this.metrics.connection.latency}ms`;
+                document.getElementById('transportValue').textContent = this.metrics.connection.transport;
+                document.getElementById('fpsValue').textContent = this.metrics.performance.fps;
+                document.getElementById('memoryValue').textContent = `${this.metrics.performance.memoryUsage}MB`;
+                document.getElementById('networkQualityValue').textContent = this.metrics.performance.networkQuality;
+                document.getElementById('messagesReceivedValue').textContent = this.metrics.messages.received;
+                document.getElementById('messagesSentValue').textContent = this.metrics.messages.sent;
+                document.getElementById('messagesPerSecValue').textContent = this.metrics.messages.rate;
+                
+                // Update metric colors
+                this.updateMetric('latencyMetric', this.metrics.connection.latency, [100, 300, 500]);
+                this.updateMetric('fpsMetric', this.metrics.performance.fps, [60, 30, 15], true);
+                this.updateMetric('memoryMetric', this.metrics.performance.memoryUsage, [50, 100, 200]);
+                this.updateMetric('messagesPerSecMetric', this.metrics.messages.rate, [50, 100, 200]);
+            }
+            
+            updateMetric(elementId, value, thresholds, reverse = false) {
+                const element = document.getElementById(elementId);
+                if (!element) return;
+                
+                element.className = 'metric';
+                
+                if (typeof thresholds === 'string') {
+                    // String comparison (like connection status)
+                    if (value === thresholds) {
+                        element.classList.add('excellent');
+                    } else if (value === 'connecting') {
+                        element.classList.add('warning');
+                    } else {
+                        element.classList.add('critical');
+                    }
+                } else if (Array.isArray(thresholds)) {
+                    // Numeric thresholds
+                    if (reverse) {
+                        // Higher is better (like FPS)
+                        if (value >= thresholds[0]) element.classList.add('excellent');
+                        else if (value >= thresholds[1]) element.classList.add('good');
+                        else if (value >= thresholds[2]) element.classList.add('warning');
+                        else element.classList.add('critical');
+                    } else {
+                        // Lower is better (like latency)
+                        if (value <= thresholds[0]) element.classList.add('excellent');
+                        else if (value <= thresholds[1]) element.classList.add('good');
+                        else if (value <= thresholds[2]) element.classList.add('warning');
+                        else element.classList.add('critical');
+                    }
+                }
+            }
+            
+            updateLatencyChart() {
+                const chartContainer = document.getElementById('latencyChart');
+                chartContainer.innerHTML = '';
+                
+                const maxLatency = Math.max(...this.latencyHistory, 100);
+                
+                this.latencyHistory.forEach((latency, index) => {
+                    const bar = document.createElement('div');
+                    bar.className = 'chart-bar';
+                    bar.style.left = `${(index / this.maxHistoryPoints) * 100}%`;
+                    bar.style.height = `${(latency / maxLatency) * 100}%`;
+                    
+                    // Color based on latency
+                    if (latency < 100) {
+                        bar.style.background = 'linear-gradient(to top, #00ff00, #00ff41)';
+                    } else if (latency < 300) {
+                        bar.style.background = 'linear-gradient(to top, #ffff00, #ff8800)';
+                    } else {
+                        bar.style.background = 'linear-gradient(to top, #ff0000, #ff4400)';
+                    }
+                    
+                    chartContainer.appendChild(bar);
+                });
+            }
+            
+            // ===== LOGGING =====
+            log(message, type = 'info') {
+                const logContainer = document.getElementById('logContainer');
+                const timestamp = new Date().toLocaleTimeString();
+                
+                const logEntry = document.createElement('div');
+                logEntry.className = `log-entry ${type}`;
+                logEntry.textContent = `[${timestamp}] ${message}`;
+                
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+                
+                // Keep only last 50 logs
+                if (logContainer.children.length > 50) {
+                    logContainer.removeChild(logContainer.firstChild);
+                }
+                
+                // Console log for debugging
+                console.log(`[SocketMonitor ${type.toUpperCase()}] ${message}`);
+            }
+            
+            // ===== PUBLIC METHODS =====
+            testConnection() {
+                if (this.socket && this.socket.connected) {
+                    const start = Date.now();
+                    this.socket.emit('ping-test', start);
+                    this.log('Manual ping test initiated', 'info');
+                } else {
+                    this.log('Cannot test - socket not connected', 'error');
+                }
+            }
+            
+            reconnect() {
+                if (this.socket) {
+                    this.log('Manual reconnection initiated', 'info');
+                    this.socket.disconnect();
+                    setTimeout(() => {
+                        this.socket.connect();
+                    }, 1000);
+                }
+            }
+            
+            clearLogs() {
+                document.getElementById('logContainer').innerHTML = '';
+                this.log('Logs cleared', 'info');
+            }
+            
+            toggleMinimize() {
+                const monitor = document.getElementById('monitor');
+                this.isMinimized = !this.isMinimized;
+                
+                if (this.isMinimized) {
+                    monitor.classList.add('minimized');
+                    document.querySelector('.toggle-btn').textContent = '+';
+                } else {
+                    monitor.classList.remove('minimized');
+                    document.querySelector('.toggle-btn').textContent = '−';
+                }
+            }
+        }
+        
+        // ===== GLOBAL FUNCTIONS =====
+        let monitor;
+        
+        function initMonitor() {
+            // Initialize monitor với URL của socket server
+            monitor = new SocketClientMonitor('http://localhost:3000');
+        }
+        
+        function toggleMonitor() {
+            monitor.toggleMinimize();
+        }
+        
+        function testConnection() {
+            monitor.testConnection();
+        }
+        
+        function reconnectSocket() {
+            monitor.reconnect();
+        }
+        
+        function clearLogs() {
+            monitor.clearLogs();
+        }
+        
+        function simulateMessages() {
+            if (monitor.socket && monitor.socket.connected) {
+                for (let i = 0; i < 50; i++) {
+                    setTimeout(() => {
+                        monitor.socket.emit('test-message', { 
+                            id: i, 
+                            timestamp: Date.now(),
+                            data: `Test message ${i}` 
+                        });
+                    }, i * 10);
+                }
+                monitor.log('Simulated 50 messages', 'info');
+            } else {
+                monitor.log('Cannot simulate - not connected', 'error');
+            }
+        }
+        
+        function stressTest() {
+            if (monitor.socket && monitor.socket.connected) {
+                monitor.log('Starting stress test (1000 messages)...', 'warning');
+                
+                for (let i = 0; i < 1000; i++) {
+                    setTimeout(() => {
+                        monitor.socket.emit('stress-test', { 
+                            id: i, 
+                            timestamp: Date.now() 
+                        });
+                    }, i);
+                }
+            } else {
+                monitor.log('Cannot stress test - not connected', 'error');
+            }
+        }
+        
+        // ===== INITIALIZE ON PAGE LOAD =====
+        document.addEventListener('DOMContentLoaded', () => {
+            initMonitor();
+        });
+        
+        // ===== ERROR HANDLING =====
+        window.addEventListener('error', (event) => {
+            if (monitor) {
+                monitor.log(`JavaScript error: ${event.error.message}`, 'error');
+            }
+        });
+        
+        window.addEventListener('unhandledrejection', (event) => {
+            if (monitor) {
+                monitor.log(`Unhandled promise rejection: ${event.reason}`, 'error');
+            }
+        });
+    </script>
+</body>
+</html>
