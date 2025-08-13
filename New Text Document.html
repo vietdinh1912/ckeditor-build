@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.IO 2.3.0 Performance Monitor</title>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io-client@2.3.0/dist/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Monaco', 'Menlo', monospace;
+            background: #1a1a1a;
+            color: #00ff00;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #333;
+            padding-bottom: 15px;
+        }
+        
+        .header h1 {
+            color: #00ccff;
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        
+        .server-info {
+            color: #ffaa00;
+            font-size: 14px;
+        }
+        
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        .panel {
+            background: #2a2a2a;
+            border: 2px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        }
+        
+        .panel h3 {
+            color: #00ccff;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #333;
+            padding-bottom: 5px;
+            font-size: 16px;
+        }
+        
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            margin: 8px 0;
+            padding: 5px 0;
+            font-size: 14px;
+        }
+        
+        .metric-value {
+            font-weight: bold;
+        }
+        
+        .good { color: #00ff00; }
+        .warning { color: #ffaa00; }
+        .error { color: #ff0000; }
+        .info { color: #00ccff; }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        
+        button {
+            background: #333;
+            color: #00ff00;
+            border: 1px solid #555;
+            padding: 10px 20px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-family: inherit;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            background: #444;
+            transform: translateY(-1px);
+        }
+        
+        button.active {
+            background: #006600;
+            color: white;
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .connection-status {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .connected { background: #00ff00; box-shadow: 0 0 10px #00ff00; }
+        .disconnected { background: #ff0000; box-shadow: 0 0 10px #ff0000; }
+        .reconnecting { 
+            background: #ffaa00; 
+            box-shadow: 0 0 10px #ffaa00;
+            animation: pulse 1s infinite; 
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.1); }
+        }
+        
+        .log-panel {
+            height: 250px;
+            overflow-y: auto;
+            background: #000;
+            border: 1px solid #333;
+            padding: 10px;
+            font-size: 12px;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .log-entry {
+            margin: 3px 0;
+            word-break: break-all;
+            padding: 2px 0;
+            border-bottom: 1px solid #222;
+        }
+        
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+        
+        .timestamp {
+            color: #666;
+            margin-right: 10px;
+        }
+        
+        .mini-chart {
+            width: 100%;
+            height: 60px;
+            background: #1a1a1a;
+            position: relative;
+            overflow: hidden;
+            border: 1px solid #333;
+            margin: 10px 0;
+        }
+        
+        .chart-line {
+            position: absolute;
+            bottom: 0;
+            width: 3px;
+            background: #00ff00;
+            transition: height 0.3s ease;
+            border-radius: 1px 1px 0 0;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 25px;
+            background: #333;
+            border-radius: 12px;
+            overflow: hidden;
+            margin: 8px 0;
+            position: relative;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00ff00 0%, #ffaa00 70%, #ff0000 100%);
+            transition: width 0.5s ease;
+            border-radius: 12px;
+        }
+        
+        .progress-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 12px;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .stat-box {
+            background: #1a1a1a;
+            padding: 8px;
+            border-radius: 4px;
+            text-align: center;
+            border: 1px solid #333;
+        }
+        
+        .stat-number {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 2px;
+        }
+        
+        .stat-label {
+            font-size: 10px;
+            color: #999;
+            text-transform: uppercase;
+        }
+        
+        .debug-section {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #333;
+        }
+        
+        .debug-toggle {
+            font-size: 12px;
+            padding: 5px 10px;
+            margin-bottom: 10px;
+        }
+        
+        .alert {
+            background: rgba(255, 0, 0, 0.1);
+            border: 1px solid #ff0000;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            color: #ff6666;
+        }
+        
+        .alert.warning {
+            background: rgba(255, 170, 0, 0.1);
+            border-color: #ffaa00;
+            color: #ffcc66;
+        }
+        
+        .alert.info {
+            background: rgba(0, 204, 255, 0.1);
+            border-color: #00ccff;
+            color: #66ddff;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔌 Socket.IO 2.3.0 Performance Monitor</h1>
+        <div class="server-info">Server: https://bgdatafeed.vps.com.vn/</div>
+    </div>
+
+    <div class="controls">
+        <button id="connectBtn">🔗 Connect</button>
+        <button id="disconnectBtn" disabled>❌ Disconnect</button>
+        <button id="clearLogBtn">🗑️ Clear Logs</button>
+        <button id="exportBtn">📊 Export Data</button>
+        <button id="debugToggle" class="debug-toggle">🐛 Toggle Debug</button>
+    </div>
+
+    <div class="dashboard">
+        <!-- Connection Panel -->
+        <div class="panel">
+            <h3>📡 Connection Status</h3>
+            <div class="metric">
+                <span>Status:</span>
+                <span>
+                    <span id="connectionStatus" class="connection-status disconnected"></span>
+                    <span id="connectionText">Disconnected</span>
+                </span>
+            </div>
+            <div class="metric">
+                <span>Transport:</span>
+                <span id="transport" class="metric-value info">-</span>
+            </div>
+            <div class="metric">
+                <span>Socket ID:</span>
+                <span id="socketId" class="metric-value info">-</span>
+            </div>
+            <div class="metric">
+                <span>Reconnections:</span>
+                <span id="reconnectionCount" class="metric-value warning">0</span>
+            </div>
+            <div class="metric">
+                <span>Connected Time:</span>
+                <span id="connectedTime" class="metric-value good">00:00:00</span>
+            </div>
+            <div class="metric">
+                <span>Last Disconnect:</span>
+                <span id="lastDisconnect" class="metric-value error">-</span>
+            </div>
+        </div>
+
+        <!-- Message Performance Panel -->
+        <div class="panel">
+            <h3>📨 Message Performance</h3>
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <div id="totalMessages" class="stat-number good">0</div>
+                    <div class="stat-label">Total Messages</div>
+                </div>
+                <div class="stat-box">
+                    <div id="messageRate" class="stat-number info">0/s</div>
+                    <div class="stat-label">Rate</div>
+                </div>
+                <div class="stat-box">
+                    <div id="avgProcessingTime" class="stat-number warning">0ms</div>
+                    <div class="stat-label">Avg Process</div>
+                </div>
+                <div class="stat-box">
+                    <div id="slowMessages" class="stat-number error">0</div>
+                    <div class="stat-label">Slow (>16ms)</div>
+                </div>
+            </div>
+            <div class="mini-chart" id="messageChart"></div>
+            <div class="metric">
+                <span>Largest Message:</span>
+                <span id="largestMessage" class="metric-value">0 bytes</span>
+            </div>
+        </div>
+
+        <!-- Network Performance Panel -->
+        <div class="panel">
+            <h3>🌐 Network Performance</h3>
+            <div class="metric">
+                <span>Current Ping:</span>
+                <span id="currentPing" class="metric-value">-</span>
+            </div>
+            <div class="metric">
+                <span>Average Latency:</span>
+                <span id="avgLatency" class="metric-value">-</span>
+            </div>
+            <div class="metric">
+                <span>Jitter:</span>
+                <span id="jitter" class="metric-value">-</span>
+            </div>
+            <div class="metric">
+                <span>Network Health:</span>
+                <span id="networkHealth" class="metric-value good">Unknown</span>
+            </div>
+            <div class="mini-chart" id="pingChart"></div>
+            <div class="metric">
+                <span>Transport Switches:</span>
+                <span id="transportSwitches" class="metric-value warning">0</span>
+            </div>
+        </div>
+
+        <!-- Memory & Performance Panel -->
+        <div class="panel">
+            <h3>💾 Memory & Performance</h3>
+            <div class="metric">
+                <span>Used Heap:</span>
+                <span id="usedHeap" class="metric-value">- MB</span>
+            </div>
+            <div class="metric">
+                <span>Total Heap:</span>
+                <span id="totalHeap" class="metric-value">- MB</span>
+            </div>
+            <div class="progress-bar">
+                <div id="memoryProgress" class="progress-fill" style="width: 0%"></div>
+                <div id="memoryProgressText" class="progress-text">0%</div>
+            </div>
+            <div class="metric">
+                <span>Long Tasks (>50ms):</span>
+                <span id="longTasks" class="metric-value error">0</span>
+            </div>
+            <div class="metric">
+                <span>Memory Trend:</span>
+                <span id="memoryTrend" class="metric-value">-</span>
+            </div>
+        </div>
+
+        <!-- Event Statistics Panel -->
+        <div class="panel">
+            <h3>📊 Event Statistics</h3>
+            <div id="eventStats" class="stats-grid">
+                <!-- Event stats will be populated dynamically -->
+            </div>
+            <div class="debug-section">
+                <div class="metric">
+                    <span>Unique Events:</span>
+                    <span id="uniqueEvents" class="metric-value info">0</span>
+                </div>
+                <div class="metric">
+                    <span>Most Frequent:</span>
+                    <span id="mostFrequentEvent" class="metric-value good">-</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Debug & Issues Panel -->
+        <div class="panel">
+            <h3>🐛 Issues & Debug</h3>
+            <div id="alerts">
+                <!-- Alerts will be populated here -->
+            </div>
+            <div class="metric">
+                <span>Connection Errors:</span>
+                <span id="connectionErrors" class="metric-value error">0</span>
+            </div>
+            <div class="metric">
+                <span>Buffer Overflows:</span>
+                <span id="bufferOverflows" class="metric-value warning">0</span>
+            </div>
+            <div class="metric">
+                <span>Timeout Events:</span>
+                <span id="timeoutEvents" class="metric-value warning">0</span>
+            </div>
+        </div>
+
+        <!-- Real-time Log Panel -->
+        <div class="panel" style="grid-column: 1/-1;">
+            <h3>📝 Real-time Performance Log</h3>
+            <div id="performanceLog" class="log-panel">
+                <div class="log-entry">
+                    <span class="timestamp">[00:00:00]</span>
+                    <span class="info">🚀 Socket.IO Performance Monitor initialized</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class SocketPerformanceMonitor {
+            constructor() {
+                this.socket = null;
+                this.isConnected = false;
+                this.isDebugEnabled = false;
+                this.connectionStartTime = null;
+                this.connectionTimer = null;
+                
+                // Performance metrics
+                this.metrics = {
+                    totalMessages: 0,
+                    totalProcessingTime: 0,
+                    slowMessages: 0,
+                    reconnections: 0,
+                    longTasks: 0,
+                    connectionErrors: 0,
+                    bufferOverflows: 0,
+                    timeoutEvents: 0,
+                    transportSwitches: 0,
+                    largestMessageSize: 0,
+                    
+                    // History arrays
+                    messageRateHistory: [],
+                    pingHistory: [],
+                    memoryHistory: [],
+                    processingTimeHistory: [],
+                    
+                    // Event tracking
+                    eventCounts: new Map(),
+                    
+                    // Timing
+                    lastMessageTime: 0,
+                    messageTimestamps: [],
+                    
+                    // Network
+                    lastPingStart: 0,
+                    currentPing: null
+                };
+                
+                this.init();
+            }
+            
+            init() {
+                this.setupUI();
+                this.setupPerformanceObserver();
+                this.startMetricsCollection();
+                this.log('🎯 Performance monitor ready. Click Connect to start monitoring.', 'info');
+            }
+            
+            setupUI() {
+                document.getElementById('connectBtn').onclick = () => this.connect();
+                document.getElementById('disconnectBtn').onclick = () => this.disconnect();
+                document.getElementById('clearLogBtn').onclick = () => this.clearLogs();
+                document.getElementById('exportBtn').onclick = () => this.exportData();
+                document.getElementById('debugToggle').onclick = () => this.toggleDebug();
+            }
+            
+            toggleDebug() {
+                this.isDebugEnabled = !this.isDebugEnabled;
+                
+                if (this.isDebugEnabled) {
+                    localStorage.debug = 'socket.io-client:*';
+                    this.log('🐛 Debug mode enabled', 'info');
+                    document.getElementById('debugToggle').classList.add('active');
+                } else {
+                    localStorage.removeItem('debug');
+                    this.log('🐛 Debug mode disabled', 'info');
+                    document.getElementById('debugToggle').classList.remove('active');
+                }
+            }
+            
+            setupPerformanceObserver() {
+                // Long task observer
+                if ('PerformanceObserver' in window) {
+                    try {
+                        const observer = new PerformanceObserver((list) => {
+                            list.getEntries().forEach((entry) => {
+                                if (entry.duration > 50) {
+                                    this.metrics.longTasks++;
+                                    this.log(`⚠️ Long task detected: ${entry.duration.toFixed(2)}ms`, 'warning');
+                                    this.showAlert(`Long task: ${entry.duration.toFixed(2)}ms`, 'warning');
+                                    this.updateUI();
+                                }
+                            });
+                        });
+                        
+                        observer.observe({ entryTypes: ['longtask'] });
+                        this.log('📊 Long task observer activated', 'info');
+                    } catch (e) {
+                        this.log('❌ Could not setup performance observer: ' + e.message, 'error');
+                    }
+                }
+            }
+            
+            connect() {
+                if (this.isConnected) return;
+                
+                this.log('🔌 Attempting to connect to server...', 'info');
+                
+                try {
+                    // Socket.IO 2.3.0 configuration
+                    this.socket = io('https://bgdatafeed.vps.com.vn/', {
+                        timeout: 20000,
+                        reconnection: true,
+                        reconnectionAttempts: 5,
+                        reconnectionDelay: 1000,
+                        reconnectionDelayMax: 5000,
+                        transports: ['websocket', 'polling'],
+                        forceNew: true
+                    });
+                    
+                    this.setupSocketListeners();
+                    
+                } catch (error) {
+                    this.log('❌ Connection failed: ' + error.message, 'error');
+                    this.metrics.connectionErrors++;
+                }
+            }
+            
+            setupSocketListeners() {
+                // Connection events
+                this.socket.on('connect', () => {
+                    this.isConnected = true;
+                    this.connectionStartTime = Date.now();
+                    this.startConnectionTimer();
+                    
+                    document.getElementById('connectBtn').disabled = true;
+                    document.getElementById('disconnectBtn').disabled = false;
+                    document.getElementById('connectionStatus').className = 'connection-status connected';
+                    document.getElementById('connectionText').textContent = 'Connected';
+                    document.getElementById('socketId').textContent = this.socket.id || 'Unknown';
+                    document.getElementById('transport').textContent = this.socket.io.engine.transport.name;
+                    
+                    this.log(`✅ Connected! Socket ID: ${this.socket.id}`, 'good');
+                    this.log(`🚀 Transport: ${this.socket.io.engine.transport.name}`, 'info');
+                    
+                    this.showAlert('Successfully connected to server', 'info');
+                });
+                
+                this.socket.on('disconnect', (reason) => {
+                    this.isConnected = false;
+                    this.stopConnectionTimer();
+                    
+                    document.getElementById('connectBtn').disabled = false;
+                    document.getElementById('disconnectBtn').disabled = true;
+                    document.getElementById('connectionStatus').className = 'connection-status disconnected';
+                    document.getElementById('connectionText').textContent = 'Disconnected';
+                    document.getElementById('lastDisconnect').textContent = new Date().toLocaleTimeString();
+                    
+                    this.log(`❌ Disconnected: ${reason}`, 'error');
+                    this.showAlert(`Disconnected: ${reason}`, 'error');
+                });
+                
+                this.socket.on('reconnecting', (attemptNumber) => {
+                    document.getElementById('connectionStatus').className = 'connection-status reconnecting';
+                    document.getElementById('connectionText').textContent = `Reconnecting (${attemptNumber})`;
+                    this.log(`🔄 Reconnecting attempt #${attemptNumber}`, 'warning');
+                });
+                
+                this.socket.on('reconnect', (attemptNumber) => {
+                    this.metrics.reconnections++;
+                    this.log(`✅ Reconnected after ${attemptNumber} attempts`, 'good');
+                    this.showAlert(`Reconnected after ${attemptNumber} attempts`, 'info');
+                });
+                
+                this.socket.on('connect_error', (error) => {
+                    this.metrics.connectionErrors++;
+                    this.log(`❌ Connection error: ${error.message}`, 'error');
+                    this.showAlert(`Connection error: ${error.message}`, 'error');
+                });
+                
+                this.socket.on('connect_timeout', () => {
+                    this.metrics.timeoutEvents++;
+                    this.log('⏰ Connection timeout', 'warning');
+                    this.showAlert('Connection timeout occurred', 'warning');
+                });
+                
+                // Transport events
+                this.socket.io.engine.on('upgrade', (transport) => {
+                    this.metrics.transportSwitches++;
+                    document.getElementById('transport').textContent = transport.name;
+                    this.log(`🚀 Transport upgraded to: ${transport.name}`, 'info');
+                });
+                
+                this.socket.io.engine.on('upgradeError', (error) => {
+                    this.log(`❌ Transport upgrade failed: ${error.message}`, 'error');
+                });
+                
+                // Ping/Pong for latency measurement
+                this.socket.on('ping', () => {
+                    this.metrics.lastPingStart = performance.now();
+                });
+                
+                this.socket.on('pong', (latency) => {
+                    const roundTripTime = performance.now() - this.metrics.lastPingStart;
+                    this.metrics.currentPing = latency;
+                    
+                    this.metrics.pingHistory.push({
+                        serverLatency: latency,
+                        roundTripTime: roundTripTime,
+                        timestamp: Date.now()
+                    });
+                    
+                    // Keep only last 50 ping samples
+                    if (this.metrics.pingHistory.length > 50) {
+                        this.metrics.pingHistory.shift();
+                    }
+                    
+                    this.updateNetworkMetrics();
+                    
+                    if (latency > 500) {
+                        this.log(`🐌 High latency: ${latency}ms`, 'warning');
+                    }
+                });
+                
+                // Listen to ALL events to track message performance
+                this.socket.onAny((eventName, ...args) => {
+                    this.trackMessagePerformance(eventName, args);
+                });
+                
+                // Buffer monitoring
+                if (this.socket.sendBuffer) {
+                    setInterval(() => {
+                        if (this.socket.sendBuffer.length > 50) {
+                            this.metrics.bufferOverflows++;
+                            this.log(`🚨 Buffer overflow: ${this.socket.sendBuffer.length} messages queued`, 'error');
+                        }
+                    }, 1000);
+                }
+            }
+            
+            trackMessagePerformance(eventName, args) {
+                const start = performance.now();
+                const timestamp = Date.now();
+                
+                // Track event frequency
+                const currentCount = this.metrics.eventCounts.get(eventName) || 0;
+                this.metrics.eventCounts.set(eventName, currentCount + 1);
+                
+                // Measure data size
+                let dataSize = 0;
+                try {
+                    dataSize = new Blob([JSON.stringify(args)]).size;
+                    if (dataSize > this.metrics.largestMessageSize) {
+                        this.metrics.largestMessageSize = dataSize;
+                    }
+                } catch (e) {
+                    // Silent fail for non-serializable data
+                }
+                
+                // Simulate processing time measurement
+                setTimeout(() => {
+                    const processingTime = performance.now() - start;
+                    
+                    this.metrics.totalMessages++;
+                    this.metrics.totalProcessingTime += processingTime;
+                    this.metrics.processingTimeHistory.push(processingTime);
+                    
+                    // Keep only last 100 processing times
+                    if (this.metrics.processingTimeHistory.length > 100) {
+                        this.metrics.processingTimeHistory.shift();
+                    }
+                    
+                    // Track slow messages (>16ms frame budget)
+                    if (processingTime > 16) {
+                        this.metrics.slowMessages++;
+                        this.log(`🐌 Slow message processing: ${eventName} took ${processingTime.toFixed(2)}ms`, 'warning');
+                    }
+                    
+                    // Track message timestamps for rate calculation
+                    this.metrics.messageTimestamps.push(timestamp);
+                    
+                    // Keep only last 60 seconds of timestamps
+                    const oneMinuteAgo = timestamp - 60000;
+                    this.metrics.messageTimestamps = this.metrics.messageTimestamps.filter(t => t > oneMinuteAgo);
+                    
+                    this.metrics.lastMessageTime = timestamp;
+                    this.updateUI();
+                    
+                    // Log high-frequency events less often
+                    if (this.shouldLogMessage(eventName)) {
+                        this.log(`📨 ${eventName}: ${processingTime.toFixed(2)}ms (${dataSize} bytes)`, 
+                               processingTime > 16 ? 'warning' : 'good');
+                    }
+                }, 0);
+            }
+            
+            shouldLogMessage(eventName) {
+                const count = this.metrics.eventCounts.get(eventName) || 0;
+                // Log every message for first 10, then every 10th, then every 100th
+                return count <= 10 || count % (count > 100 ? 100 : 10) === 0;
+            }
+            
+            updateNetworkMetrics() {
+                if (this.metrics.pingHistory.length === 0) return;
+                
+                const recent = this.metrics.pingHistory.slice(-10);
+                const avgLatency = recent.reduce((sum, p) => sum + p.serverLatency, 0) / recent.length;
+                const maxLatency = Math.max(...recent.map(p => p.serverLatency));
+                const minLatency = Math.min(...recent.map(p => p.serverLatency));
+                const jitter = maxLatency - minLatency;
+                
+                document.getElementById('currentPing').textContent = this.metrics.currentPing + 'ms';
+                document.getElementById('currentPing').className = 'metric-value ' + 
+                    (this.metrics.currentPing < 100 ? 'good' : this.metrics.currentPing < 300 ? 'warning' : 'error');
+                
+                document.getElementById('avgLatency').textContent = avgLatency.toFixed(0) + 'ms';
+                document.getElementById('jitter').textContent = jitter.toFixed(0) + 'ms';
+                
+                // Network health assessment
+                let health = 'Excellent';
+                let healthClass = 'good';
+                
+                if (avgLatency > 300 || jitter > 200) {
+                    health = 'Poor';
+                    healthClass = 'error';
+                } else if (avgLatency > 150 || jitter > 100) {
+                    health = 'Fair';
+                    healthClass = 'warning';
+                } else if (avgLatency > 50) {
+                    health = 'Good';
+                    healthClass = 'info';
+                }
+                
+                document.getElementById('networkHealth').textContent = health;
+                document.getElementById('networkHealth').className = 'metric-value ' + healthClass;
+            }
+            
+            startMetricsCollection() {
+                // Update every second
+                setInterval(() => {
+                    if (this.isConnected) {
+                        this.updateMemoryMetrics();
+                        this.updateMessageRate();
+                        this.updateEventStats();
+                        this.updateCharts();
+                    }
+                }, 1000);
+            }
+            
+            updateMemoryMetrics() {
+                if ('memory' in performance) {
+                    const memory = performance.memory;
+                    const used = Math.round(memory.usedJSHeapSize / 1024 / 1024);
+                    const total = Math.round(memory.totalJSHeapSize / 1024 / 1024);
+                    const limit = Math.round(memory.jsHeapSizeLimit / 1024 / 1024);
+                    const percentage = (used / limit * 100).toFixed(1);
+                    
+                    document.getElementById('usedHeap').textContent = used + ' MB';
+                    document.getElementById('totalHeap').textContent = total + ' MB';
+                    document.getElementById('memoryProgress').style.width = percentage + '%';
+                    document.getElementById('memoryProgressText').textContent = percentage + '%';
+                    
+                    // Memory trend analysis
+                    this.metrics.memoryHistory.push(used);
+                    if (this.metrics.memoryHistory.length > 60) { // Keep 1 minute
+                        this.metrics.memoryHistory.shift();
+                    }
+                    
+                    if (this.metrics.memoryHistory.length >= 10) {
+                        const recent = this.metrics.memoryHistory.slice(-5);
+                        const older = this.metrics.memoryHistory.slice(-10, -5);
+                        const recentAvg = recent.reduce((a, b) => a + b, 0) / recent.length;
+                        const olderAvg = older.reduce((a, b) => a + b, 0) / older.length;
+                        
+                        let trend = 'Stable';
+                        let trendClass = 'good';
+                        
+                        const change = recentAvg - olderAvg;
+                        if (change > 2) { // >2MB increase
+                            trend = '📈 Increasing';
+                            trendClass = 'warning';
+                            if (change > 5) {
+                                this.showAlert(`High memory usage increase: +${change.toFixed(1)}MB`, 'warning');
+                            }
+                        } else if (change < -2) {
+                            trend = '📉 Decreasing';
+                            trendClass = 'good';
+                        }
+                        
+                        document.getElementById('memoryTrend').textContent = trend;
+                        document.getElementById('memoryTrend').className = 'metric-value ' + trendClass;
+                    }
+                    
+                    // Memory warning
+                    if (used > limit * 0.8) {
+                        this.showAlert(`High memory usage: ${percentage}%`, 'warning');
+                    }
+                }
+            }
+            
+            updateMessageRate() {
+                const now = Date.now();
+                const oneSecondAgo = now - 1000;
+                const recentMessages = this.metrics.messageTimestamps.filter(t => t > oneSecondAgo);
+                const currentRate = recentMessages.length;
+                
+                this.metrics.messageRateHistory.push(currentRate);
+                if (this.metrics.messageRateHistory.length > 60) { // Keep 1 minute
+                    this.metrics.messageRateHistory.shift();
+                }
+                
+                document.getElementById('messageRate').textContent = currentRate + '/s';
+                
+                // Rate analysis
+                if (currentRate > 50) {
+                    document.getElementById('messageRate').className = 'stat-number error';
+                    if (currentRate > 100) {
+                        this.showAlert(`Very high message rate: ${currentRate}/s`, 'warning');
+                    }
+                } else if (currentRate > 20) {
+                    document.getElementById('messageRate').className = 'stat-number warning';
+                } else {
+                    document.getElementById('messageRate').className = 'stat-number info';
+                }
+            }
+            
+            updateEventStats() {
+                const eventStats = document.getElementById('eventStats');
+                eventStats.innerHTML = '';
+                
+                // Convert map to sorted array
+                const sortedEvents = Array.from(this.metrics.eventCounts.entries())
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 6); // Show top 6 events
+                
+                sortedEvents.forEach(([eventName, count]) => {
+                    const statBox = document.createElement('div');
+                    statBox.className = 'stat-box';
+                    statBox.innerHTML = `
+                        <div class="stat-number good">${count}</div>
+                        <div class="stat-label">${eventName}</div>
+                    `;
+                    eventStats.appendChild(statBox);
+                });
+                
+                // Update summary stats
+                document.getElementById('uniqueEvents').textContent = this.metrics.eventCounts.size;
+                if (sortedEvents.length > 0) {
+                    document.getElementById('mostFrequentEvent').textContent = sortedEvents[0][0];
+                }
+            }
+            
+            updateCharts() {
+                this.updateMiniChart('messageChart', this.metrics.messageRateHistory, 100, '#00ff00');
+                
+                if (this.metrics.pingHistory.length > 0) {
+                    const pingData = this.metrics.pingHistory.slice(-30).map(p => p.serverLatency);
+                    this.updateMiniChart('pingChart', pingData, 500, '#00ccff');
+                }
+            }
+            
+            updateMiniChart(elementId, data, maxValue, color = '#00ff00') {
+                const container = document.getElementById(elementId);
+                if (!container || data.length < 2) return;
+                
+                container.innerHTML = '';
+                
+                const width = container.offsetWidth;
+                const height = container.offsetHeight;
+                const step = Math.max(2, width / Math.max(data.length - 1, 1));
+                
+                data.forEach((value, index) => {
+                    const bar = document.createElement('div');
+                    bar.className = 'chart-line';
+                    bar.style.left = (index * step) + 'px';
+                    bar.style.height = Math.max(2, (value / maxValue * height)) + 'px';
+                    bar.style.background = color;
+                    
+                    // Color coding for different value ranges
+                    if (elementId === 'pingChart') {
+                        if (value > maxValue * 0.6) bar.style.background = '#ff0000';
+                        else if (value > maxValue * 0.3) bar.style.background = '#ffaa00';
+                    } else if (elementId === 'messageChart') {
+                        if (value > maxValue * 0.5) bar.style.background = '#ff0000';
+                        else if (value > maxValue * 0.3) bar.style.background = '#ffaa00';
+                    }
+                    
+                    container.appendChild(bar);
+                });
+            }
+            
+            startConnectionTimer() {
+                this.connectionTimer = setInterval(() => {
+                    if (this.connectionStartTime) {
+                        const elapsed = Date.now() - this.connectionStartTime;
+                        const hours = Math.floor(elapsed / 3600000);
+                        const minutes = Math.floor((elapsed % 3600000) / 60000);
+                        const seconds = Math.floor((elapsed % 60000) / 1000);
+                        
+                        document.getElementById('connectedTime').textContent = 
+                            `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                    }
+                }, 1000);
+            }
+            
+            stopConnectionTimer() {
+                if (this.connectionTimer) {
+                    clearInterval(this.connectionTimer);
+                    this.connectionTimer = null;
+                }
+            }
+            
+            updateUI() {
+                // Update basic metrics
+                document.getElementById('totalMessages').textContent = this.metrics.totalMessages;
+                document.getElementById('slowMessages').textContent = this.metrics.slowMessages;
+                document.getElementById('reconnectionCount').textContent = this.metrics.reconnections;
+                document.getElementById('longTasks').textContent = this.metrics.longTasks;
+                document.getElementById('connectionErrors').textContent = this.metrics.connectionErrors;
+                document.getElementById('bufferOverflows').textContent = this.metrics.bufferOverflows;
+                document.getElementById('timeoutEvents').textContent = this.metrics.timeoutEvents;
+                document.getElementById('transportSwitches').textContent = this.metrics.transportSwitches;
+                document.getElementById('largestMessage').textContent = this.formatBytes(this.metrics.largestMessageSize);
+                
+                // Average processing time
+                const avgProcessing = this.metrics.totalMessages > 0 
+                    ? (this.metrics.totalProcessingTime / this.metrics.totalMessages).toFixed(2)
+                    : '0.00';
+                document.getElementById('avgProcessingTime').textContent = avgProcessing + 'ms';
+                
+                // Color code based on performance
+                const avgElement = document.getElementById('avgProcessingTime');
+                if (parseFloat(avgProcessing) > 16) {
+                    avgElement.className = 'stat-number error';
+                } else if (parseFloat(avgProcessing) > 8) {
+                    avgElement.className = 'stat-number warning';
+                } else {
+                    avgElement.className = 'stat-number good';
+                }
+            }
+            
+            showAlert(message, type = 'info') {
+                const alertsContainer = document.getElementById('alerts');
+                const alert = document.createElement('div');
+                alert.className = `alert ${type}`;
+                alert.innerHTML = `
+                    <strong>[${new Date().toLocaleTimeString()}]</strong> ${message}
+                `;
+                
+                alertsContainer.insertBefore(alert, alertsContainer.firstChild);
+                
+                // Keep only last 5 alerts
+                while (alertsContainer.children.length > 5) {
+                    alertsContainer.removeChild(alertsContainer.lastChild);
+                }
+                
+                // Auto remove after 10 seconds
+                setTimeout(() => {
+                    if (alert.parentNode) {
+                        alert.parentNode.removeChild(alert);
+                    }
+                }, 10000);
+            }
+            
+            disconnect() {
+                if (this.socket && this.isConnected) {
+                    this.socket.disconnect();
+                    this.log('🔌 Manual disconnect initiated', 'warning');
+                }
+            }
+            
+            log(message, type = 'info') {
+                const logPanel = document.getElementById('performanceLog');
+                const timestamp = new Date().toLocaleTimeString();
+                const entry = document.createElement('div');
+                entry.className = `log-entry ${type}`;
+                entry.innerHTML = `
+                    <span class="timestamp">[${timestamp}]</span>
+                    <span class="${type}">${message}</span>
+                `;
+                
+                logPanel.insertBefore(entry, logPanel.firstChild);
+                
+                // Keep only last 200 log entries
+                while (logPanel.children.length > 200) {
+                    logPanel.removeChild(logPanel.lastChild);
+                }
+            }
+            
+            clearLogs() {
+                const logPanel = document.getElementById('performanceLog');
+                logPanel.innerHTML = `
+                    <div class="log-entry">
+                        <span class="timestamp">[${new Date().toLocaleTimeString()}]</span>
+                        <span class="info">📝 Logs cleared</span>
+                    </div>
+                `;
+                
+                // Clear alerts too
+                document.getElementById('alerts').innerHTML = '';
+                
+                this.log('🗑️ Performance logs cleared', 'info');
+            }
+            
+            exportData() {
+                const exportData = {
+                    timestamp: new Date().toISOString(),
+                    server: 'https://bgdatafeed.vps.com.vn/',
+                    socketIOVersion: '2.3.0',
+                    connectionStatus: this.isConnected,
+                    metrics: {
+                        ...this.metrics,
+                        eventCounts: Object.fromEntries(this.metrics.eventCounts)
+                    },
+                    performance: {
+                        userAgent: navigator.userAgent,
+                        memory: performance.memory ? {
+                            used: Math.round(performance.memory.usedJSHeapSize / 1024 / 1024),
+                            total: Math.round(performance.memory.totalJSHeapSize / 1024 / 1024),
+                            limit: Math.round(performance.memory.jsHeapSizeLimit / 1024 / 1024)
+                        } : null
+                    }
+                };
+                
+                const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+                    type: 'application/json'
+                });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `socket-performance-${Date.now()}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                this.log('📊 Performance data exported', 'info');
+            }
+            
+            formatBytes(bytes) {
+                if (bytes === 0) return '0 B';
+                const k = 1024;
+                const sizes = ['B', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+            }
+        }
+        
+        // Initialize the monitor when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            window.socketMonitor = new SocketPerformanceMonitor();
+        });
+        
+        // Add some helpful console commands
+        window.addEventListener('load', () => {
+            console.log(`
+🔌 Socket.IO Performance Monitor Commands:
+• socketMonitor.connect() - Connect to server
+• socketMonitor.disconnect() - Disconnect from server
+• socketMonitor.exportData() - Export performance data
+• socketMonitor.toggleDebug() - Toggle debug mode
+• socketMonitor.metrics - View current metrics
+• localStorage.debug = 'socket.io-client:*' - Enable Socket.IO debug
+            `);
+        });
+    </script>
+</body>
+</html>
